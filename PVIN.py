@@ -222,7 +222,7 @@ def main():
     sigma = 0.5
     dt = 0.05
     T = 90000.0
-    print_time = 90000.0  # 3 seconds in the model's millisecond time units
+    print_time = 3000.0 # 3 secs
 
     t_noise, I_OU = generate_ou_noise(T, dt, mu, tau, sigma, seed=0)
 
