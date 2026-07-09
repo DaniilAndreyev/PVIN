@@ -13,7 +13,7 @@ from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 
 
-def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0):
+def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0):
     """
     Right-hand side of the PVIN Hodgkin-Huxley system.
 
@@ -39,6 +39,8 @@ def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0):
         SK channel calcium sensitivity (uM).
     gCa : float, optional
         Calcium channel conductance (nS).
+    Inoise : float, optional
+        Additional noise current term added directly to dV (not scaled by Cm).
 
     Returns
     -------
@@ -116,7 +118,7 @@ def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0):
     tau_r = 1.0 / (np.exp(-14.59 - 0.086 * V) + np.exp(-1.87 + 0.0701 * V))
     Ih = gh * r * (V - Eh)
 
-    dV = (-Ileak - INa - IKv1 - IKv3 - ICa - ISK - Ih + Iapp) / Cm
+    dV = (-Ileak - INa - IKv1 - IKv3 - ICa - ISK - Ih + Iapp) / Cm + Inoise
     dh = ah * (1.0 - h) - bh * h
     dn1 = an1 * (1.0 - n1) - bn1 * n1
     dn3 = an3 * (1.0 - n3) - bn3 * n3
@@ -194,12 +196,13 @@ def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
         Solution object with attributes `.t` (time) and `.y` (state trajectories).
     """
 
-    def iapp_at(t):
+    def inoise_at(t):
         return np.interp(t, t_noise, I_OU)
 
     def rhs(t, y):
-        Iapp = iapp_at(t)
-        return pvin_hh(t, y, Bt, Iapp, gSK=gSK, ksk=ksk, gCa=gCa)
+        Iapp = 0.0
+        Inoise = inoise_at(t)
+        return pvin_hh(t, y, Bt, Iapp, gSK=gSK, ksk=ksk, gCa=gCa, Inoise=Inoise)
 
     sol = solve_ivp(
         rhs,
@@ -214,16 +217,16 @@ def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
 
 
 def main():
-    mu = 200.0
-    tau = 3.0
-    sigma = 50.0
+    mu = 0
+    tau = 1000
+    sigma = 1
     dt = 0.05
-    T = 1000.0
+    T = 90000.0
 
     t_noise, I_OU = generate_ou_noise(T, dt, mu, tau, sigma, seed=0)
 
     y0 = [-69.9853, 0.99944, 0.000454, 0.000112, 0.02960, 0.25]
-    Bt = 10.0
+    Bt = 90.0
 
     sol = run_pvin_with_ou(t_noise, I_OU, Bt, y0)
 
