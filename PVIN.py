@@ -219,16 +219,22 @@ def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
 def main():
     mu = 0
     tau = 1000
-    sigma = 1
+    sigma = 0.5
     dt = 0.05
     T = 90000.0
+    print_time = 90000.0  # 3 seconds in the model's millisecond time units
 
     t_noise, I_OU = generate_ou_noise(T, dt, mu, tau, sigma, seed=0)
 
-    y0 = [-69.9853, 0.99944, 0.000454, 0.000112, 0.02960, 0.25]
+    y0 = [-49.086653, 0.980895, 0.027342, 0.002419, 0.141284, 0.031588]
     Bt = 90.0
 
     sol = run_pvin_with_ou(t_noise, I_OU, Bt, y0)
+
+    values_at_print_time = [np.interp(print_time, sol.t, sol.y[i]) for i in range(6)]
+    V, h, n1, n3, Cai, r = values_at_print_time
+    print(f"At t={print_time:.1f} ms (3.0 s):")
+    print(f"V={V:.6f}, h={h:.6f}, n1={n1:.6f}, n3={n3:.6f}, Cai={Cai:.6f}, r={r:.6f}")
 
     fig, axes = plt.subplots(2, 1, figsize=(8, 6))
 
