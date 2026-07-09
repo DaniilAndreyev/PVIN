@@ -216,13 +216,85 @@ def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
     return sol
 
 
+def count_spikes(t, V, threshold=-20.0, min_isi=2.0):
+    above = V > threshold
+    crossings = np.where(np.diff(above.astype(int)) == 1)[0]
+    if crossings.size == 0:
+        return 0
+
+    spike_times = t[crossings]
+
+    # Enforce a minimum inter-spike interval
+    filtered = [spike_times[0]]
+    for st in spike_times[1:]:
+        if st - filtered[-1] >= min_isi:
+            filtered.append(st)
+
+    return len(filtered)
+
+
+def run_tau_sigma_sweep(tau_values, sigma_values, T=90000.0, dt=0.05,
+                         mu=0.0, Bt=90.0, seed=0,
+                         y0=None, spike_threshold=-20.0, min_isi=2.0):
+    if y0 is None:
+        y0 = [-49.086653, 0.980895, 0.027342, 0.002419, 0.141284, 0.031588]
+
+    spike_counts = np.zeros((len(tau_values), len(sigma_values)), dtype=int)
+
+    for i, tau in enumerate(tau_values):
+        for j, sigma in enumerate(sigma_values):
+            t_noise, I_OU = generate_ou_noise(T, dt, mu, tau, sigma, seed=seed)
+            sol = run_pvin_with_ou(t_noise, I_OU, Bt, y0)
+            n_spikes = count_spikes(sol.t, sol.y[0],
+                                        threshold=spike_threshold,
+                                        min_isi=min_isi)
+            spike_counts[i, j] = n_spikes
+            print(f"tau={tau:>6.1f} ms, sigma={sigma:.2f} pA -> {n_spikes} spikes")
+
+    return spike_counts
+
+
+def plot_tau_sigma_sweep(tau_values, sigma_values, spike_counts):
+    sigma_arr = np.asarray(sigma_values)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Line plot: spike count vs sigma, one line per tau
+    for i, tau in enumerate(tau_values):
+        axes[0].plot(sigma_arr, spike_counts[i], marker='o', label=f'tau={tau} ms')
+
+        if len(sigma_arr) > 1 and np.std(spike_counts[i]) > 0:
+            corr = np.corrcoef(sigma_arr, spike_counts[i])[0, 1]
+        else:
+            corr = float('nan')
+        print(f"tau={tau} ms: correlation(sigma, spike count) = {corr:.3f}")
+
+    axes[0].set_xlabel('sigma (pA)')
+    axes[0].set_ylabel('spike count')
+    axes[0].set_title('Spike count vs sigma, by tau')
+    axes[0].legend()
+
+    # Heatmap: tau (rows) x sigma (cols)
+    im = axes[1].imshow(spike_counts, aspect='auto', origin='lower',
+                         extent=[sigma_arr[0], sigma_arr[-1], 0, len(tau_values)])
+    axes[1].set_yticks(np.arange(len(tau_values)) + 0.5)
+    axes[1].set_yticklabels([f'{tau}' for tau in tau_values])
+    axes[1].set_xlabel('sigma (pA)')
+    axes[1].set_ylabel('tau (ms)')
+    axes[1].set_title('Spike count heatmap')
+    fig.colorbar(im, ax=axes[1], label='spike count')
+
+    plt.tight_layout()
+    plt.show()
+
+
 def main():
     mu = 0
     tau = 1000
-    sigma = 0.5
+    sigma = 1
     dt = 0.05
-    T = 90000.0
-    print_time = 3000.0 # 3 secs
+    T = 10000.0
+    print_time = 3000.0
 
     t_noise, I_OU = generate_ou_noise(T, dt, mu, tau, sigma, seed=0)
 
@@ -235,6 +307,9 @@ def main():
     V, h, n1, n3, Cai, r = values_at_print_time
     print(f"At t={print_time:.1f} ms (3.0 s):")
     print(f"V={V:.6f}, h={h:.6f}, n1={n1:.6f}, n3={n3:.6f}, Cai={Cai:.6f}, r={r:.6f}")
+
+    n_spikes = count_spikes(sol.t, sol.y[0])
+    print(f"Total spikes detected: {n_spikes}")
 
     fig, axes = plt.subplots(2, 1, figsize=(8, 6))
 
@@ -251,6 +326,14 @@ def main():
 
     plt.tight_layout()
     plt.show()
+
+    # --- tau/sigma sweep and correlation analysis ---
+    tau_values = [10, 100]
+    sigma_values = [1, 0.5]
+
+    spike_counts = run_tau_sigma_sweep(tau_values, sigma_values, T=T, dt=dt,
+                                        mu=mu, Bt=Bt, y0=y0)
+    plot_tau_sigma_sweep(tau_values, sigma_values, spike_counts)
 
 
 if __name__ == "__main__":
