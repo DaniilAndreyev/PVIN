@@ -217,6 +217,32 @@ def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
 
 
 def count_spikes(t, V, threshold=-20.0, min_isi=2.0):
+    """
+    Count action potentials in a voltage trace via threshold crossing.
+ 
+    A spike is counted each time V crosses `threshold` from below to above,
+    with a refractory-style minimum inter-spike interval to avoid double
+    counting noisy fluctuations near threshold.
+ 
+    Parameters
+    ----------
+    t : ndarray
+        Time vector (ms).
+    V : ndarray
+        Membrane voltage trace (mV).
+    threshold : float, optional
+        Voltage threshold (mV) defining a spike crossing.
+    min_isi : float, optional
+        Minimum time (ms) between counted spikes.
+ 
+    Returns
+    -------
+    int
+        Number of spikes detected.
+    ndarray
+        Times (ms) at which spikes were detected.
+    """
+
     above = V > threshold
     crossings = np.where(np.diff(above.astype(int)) == 1)[0]
     if crossings.size == 0:
@@ -224,7 +250,6 @@ def count_spikes(t, V, threshold=-20.0, min_isi=2.0):
 
     spike_times = t[crossings]
 
-    # Enforce a minimum inter-spike interval
     filtered = [spike_times[0]]
     for st in spike_times[1:]:
         if st - filtered[-1] >= min_isi:
@@ -236,8 +261,39 @@ def count_spikes(t, V, threshold=-20.0, min_isi=2.0):
 def run_tau_sigma_sweep(tau_values, sigma_values, T=90000.0, dt=0.05,
                          mu=0.0, Bt=90.0, seed=0,
                          y0=None, spike_threshold=-20.0, min_isi=2.0):
-    if y0 is None:
-        y0 = [-49.086653, 0.980895, 0.027342, 0.002419, 0.141284, 0.031588]
+    """
+    Sweep OU noise tau and sigma values and count spikes for each combination.
+ 
+    Parameters
+    ----------
+    tau_values : sequence of float
+        OU correlation time constants to test (ms).
+    sigma_values : sequence of float
+        OU noise amplitudes to test (pA).
+    T : float, optional
+        Simulation duration (ms).
+    dt : float, optional
+        OU noise integration timestep (ms).
+    mu : float, optional
+        OU mean current (pA).
+    Bt : float, optional
+        Calcium buffer capacity (uM).
+    seed : int, optional
+        Random seed (kept fixed across the sweep so differences in spike
+        count reflect tau/sigma, not the noise realization).
+    y0 : array_like, optional
+        Initial condition. Defaults to a resting-state vector.
+    spike_threshold : float, optional
+        Voltage threshold used for spike counting (mV).
+    min_isi : float, optional
+        Minimum inter-spike interval used for spike counting (ms).
+ 
+    Returns
+    -------
+    spike_counts : ndarray, shape (len(tau_values), len(sigma_values))
+        Number of spikes for each (tau, sigma) combination.
+    """
+
 
     spike_counts = np.zeros((len(tau_values), len(sigma_values)), dtype=int)
 
@@ -255,11 +311,24 @@ def run_tau_sigma_sweep(tau_values, sigma_values, T=90000.0, dt=0.05,
 
 
 def plot_tau_sigma_sweep(tau_values, sigma_values, spike_counts):
+    """
+    Plot spike count as a function of sigma for each tau, plus a heatmap,
+    and report the correlation between sigma and spike count for each tau.
+ 
+    Parameters
+    ----------
+    tau_values : sequence of float
+        OU correlation time constants used in the sweep (ms).
+    sigma_values : sequence of float
+        OU noise amplitudes used in the sweep (pA).
+    spike_counts : ndarray, shape (len(tau_values), len(sigma_values))
+        Spike counts from run_tau_sigma_sweep.
+    """
+
     sigma_arr = np.asarray(sigma_values)
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-    # Line plot: spike count vs sigma, one line per tau
     for i, tau in enumerate(tau_values):
         axes[0].plot(sigma_arr, spike_counts[i], marker='o', label=f'tau={tau} ms')
 
@@ -274,7 +343,6 @@ def plot_tau_sigma_sweep(tau_values, sigma_values, spike_counts):
     axes[0].set_title('Spike count vs sigma, by tau')
     axes[0].legend()
 
-    # Heatmap: tau (rows) x sigma (cols)
     im = axes[1].imshow(spike_counts, aspect='auto', origin='lower',
                          extent=[sigma_arr[0], sigma_arr[-1], 0, len(tau_values)])
     axes[1].set_yticks(np.arange(len(tau_values)) + 0.5)
@@ -293,15 +361,15 @@ def main():
     tau = 1000
     sigma = 1
     dt = 0.05
-    T = 10000.0
+    T = 90000.0
     print_time = 3000.0
 
-    t_noise, I_OU = generate_ou_noise(T, dt, mu, tau, sigma, seed=0)
+    t_noise, I_noise = generate_ou_noise(T, dt, mu, tau, sigma, seed=0)
 
     y0 = [-49.086653, 0.980895, 0.027342, 0.002419, 0.141284, 0.031588]
     Bt = 90.0
 
-    sol = run_pvin_with_ou(t_noise, I_OU, Bt, y0)
+    sol = run_pvin_with_ou(t_noise, I_noise, Bt, y0)
 
     values_at_print_time = [np.interp(print_time, sol.t, sol.y[i]) for i in range(6)]
     V, h, n1, n3, Cai, r = values_at_print_time
@@ -313,9 +381,9 @@ def main():
 
     fig, axes = plt.subplots(2, 1, figsize=(8, 6))
 
-    axes[0].plot(t_noise, I_OU, 'k', linewidth=0.5)
+    axes[0].plot(t_noise, I_noise, 'k', linewidth=0.5)
     axes[0].set_xlabel('T (ms)')
-    axes[0].set_ylabel('I_OU (pA)')
+    axes[0].set_ylabel('I_noise (pA)')
     axes[0].set_title('OU noise input current')
 
     axes[1].plot(sol.t, sol.y[0], 'k', linewidth=0.5)
@@ -327,9 +395,8 @@ def main():
     plt.tight_layout()
     plt.show()
 
-    # --- tau/sigma sweep and correlation analysis ---
-    tau_values = [10, 100]
-    sigma_values = [1, 0.5]
+    tau_values = [10, 100, 1000]
+    sigma_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
 
     spike_counts = run_tau_sigma_sweep(tau_values, sigma_values, T=T, dt=dt,
                                         mu=mu, Bt=Bt, y0=y0)
