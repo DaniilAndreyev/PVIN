@@ -13,6 +13,252 @@ from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 
 
+def _safe_exp(x):
+    """np.exp with the argument clipped to avoid overflow warnings/inf."""
+    return np.exp(np.clip(x, -500.0, 500.0))
+
+
+def _compartment_derivatives(V, h, n1, n3, Cai, r, m, Bt, gSK, ksk, gCa, gM):
+    """
+    Compute the ionic current sum and gating/calcium derivatives for a
+    single HH compartment (used identically for soma and AIS).
+
+    Parameters
+    ----------
+    V, h, n1, n3, Cai, r, m : float
+        Compartment state variables (see `pvin_hh` docstring for meaning).
+    Bt : float
+        Calcium buffer capacity (uM).
+    gSK, ksk, gCa, gM : float
+        Conductance/sensitivity parameters for this compartment.
+
+    Returns
+    -------
+    I_ionic : float
+        Sum of all ionic currents in this compartment (leak + active),
+        i.e. everything that appears with a minus sign in Cm*dV/dt aside
+        from Iapp and axial coupling.
+    dh, dn1, dn3, dCai, dr, dm : float
+        Derivatives of the non-voltage state variables.
+    """
+    # Fixed membrane parameters
+    gNa, VNa = 300.0, 58.0
+    gKv1, gKv3, VK = 15.0, 180.0, -80.0
+    VCa = 68.0
+    Vleak, gleak = -50.0, 8.0
+    pgamma = 0.01
+
+    # INa kinetics
+    Vm, Sm = -17.5, -11.4
+    Aah, Sah, Vah = 0.0025, 10.0, 23.0
+    Abh, Sbh, Vbh = 0.094, -5.5, -31.0
+
+    # IKv1 kinetics
+    Aan1, Van1, San1 = 0.0020, -30.0, -9.0
+    Abn1, Vbn1, Sbn1 = 0.0170, -35.0, 5.9
+
+    # IKv3 kinetics
+    Aan3, Van3, San3 = 1.98, 96.0, -12.6
+    Abn3, Vbn3, Sbn3 = 0.34, -36.0, 10.5
+
+    # ICa kinetics
+    Va, Sa = 3.0, -10.4
+
+    # ISK
+    nk = 5
+
+    # Ih (HCN)
+    gh, Eh = 1.5, -30.0
+
+    # Calcium dynamics
+    F = 0.0964853321
+    mArea = 3000.0
+    d = 0.1
+    Car = 0.07
+    KD = 0.1
+
+    # Sodium current
+    mmax = 1.0 / (1.0 + _safe_exp((V - Vm) / Sm))
+    ah = Aah / _safe_exp((V - Vah) / Sah)
+    bh = Abh * (V - Vbh) / (1.0 - _safe_exp((V - Vbh) / Sbh))
+    INa = gNa * mmax**3 * h * (V - VNa)
+
+    # Kv1 current
+    an1 = Aan1 * (V - Van1) / (1.0 - _safe_exp((V - Van1) / San1))
+    bn1 = Abn1 / _safe_exp((V - Vbn1) / Sbn1)
+    IKv1 = gKv1 * n1**4 * (V - VK)
+
+    # Kv3 current
+    an3 = Aan3 * (V - Van3) / (1.0 - _safe_exp((V - Van3) / San3))
+    bn3 = Abn3 / _safe_exp((V - Vbn3) / Sbn3)
+    IKv3 = gKv3 * n3**2 * (V - VK)
+
+    # Calcium current
+    amax = 1.0 / (1.0 + _safe_exp((V - Va) / Sa))
+    ICa = gCa * amax**2 * (V - VCa)
+
+    # SK current
+    k = Cai**nk / (ksk**nk + Cai**nk)
+    ISK = gSK * k * (V - VK)
+
+    # Leak current
+    Ileak = gleak * (V - Vleak)
+
+    # HCN current
+    r_inf = 1.0 / (1.0 + _safe_exp((V + 84.0) / 10.2))
+    tau_r = 1.0 / (_safe_exp(-14.59 - 0.086 * V) + _safe_exp(-1.87 + 0.0701 * V))
+    tau_r = max(tau_r, 1e-6)
+    Ih = gh * r * (V - Eh)
+
+    # M-current (IM), Eqs. (17)-(20)
+    m_inf = 1.0 / (1.0 + _safe_exp(-(V + 25.0) / 11.0))
+    tau_m = 1.0 / (
+        0.003 / _safe_exp(-(V + 78.0) / 19.0)
+        + 0.003 / _safe_exp((V + 78.0) / 19.0)
+    )
+    tau_m = max(tau_m, 1e-6)
+    IM = gM * m * (V - VK)
+
+    I_ionic = Ileak + INa + IKv1 + IKv3 + ICa + ISK + Ih + IM
+
+    dh = ah * (1.0 - h) - bh * h
+    dn1 = an1 * (1.0 - n1) - bn1 * n1
+    dn3 = an3 * (1.0 - n3) - bn3 * n3
+    dCai = (-ICa / (2.0 * F * mArea * d) - pgamma * (Cai - Car)) / (1.0 + Bt / KD)
+    dr = (r_inf - r) / tau_r
+    dm = (m_inf - m) / tau_m
+
+    return I_ionic, dh, dn1, dn3, dCai, dr, dm
+
+
+def pvin_hh_two_compartment(t, y, Bt, Iapp, g_c, kappa,
+                             gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0,
+                             gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=8.0, gM_AIS=5.0,
+                             Inoise=0.0, Cm=30.0):
+    """
+    Right-hand side of the two-compartment (soma + AIS) PVIN model.
+
+    Follows:
+        Cm*dV/dt     = -I_ionic(soma) + Iapp + (g_c/kappa)*(V_AIS - V) + Inoise
+        Cm*dV_AIS/dt = -I_ionic(AIS)          + (g_c/(1-kappa))*(V - V_AIS)
+
+    Parameters
+    ----------
+    t : float
+        Time (ms).
+    y : array_like, shape (14,)
+        State vector [V, h, n1, n3, Cai, r, m,
+                       V_AIS, h_AIS, n1_AIS, n3_AIS, Cai_AIS, r_AIS, m_AIS].
+    Bt : float
+        Calcium buffer capacity (uM), shared by both compartments.
+    Iapp : float
+        Applied/injected current at time t (pA), delivered at the soma.
+    g_c : float
+        Axial coupling conductance between soma and AIS (nS).
+    kappa : float
+        Soma-to-total surface area ratio (0 < kappa < 1). The AIS gets
+        fraction (1 - kappa).
+    gSK, ksk, gCa, gM : float, optional
+        Somatic conductance/sensitivity parameters.
+    gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS : float, optional
+        AIS conductance/sensitivity parameters (separate in case the AIS
+        channel densities differ from the soma).
+    Inoise : float, optional
+        Noise current added directly to the somatic dV (not scaled by Cm).
+    Cm : float, optional
+        Membrane capacitance (assumed equal for both compartments).
+
+    Returns
+    -------
+    list of float
+        Derivatives in the same order as `y`.
+    """
+    (V, h, n1, n3, Cai, r, m,
+     V_AIS, h_AIS, n1_AIS, n3_AIS, Cai_AIS, r_AIS, m_AIS) = y
+
+    I_ionic, dh, dn1, dn3, dCai, dr, dm = _compartment_derivatives(
+        V, h, n1, n3, Cai, r, m, Bt, gSK, ksk, gCa, gM
+    )
+    I_ionic_AIS, dh_AIS, dn1_AIS, dn3_AIS, dCai_AIS, dr_AIS, dm_AIS = _compartment_derivatives(
+        V_AIS, h_AIS, n1_AIS, n3_AIS, Cai_AIS, r_AIS, m_AIS, Bt,
+        gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS
+    )
+
+    I_axial_soma = (g_c / kappa) * (V_AIS - V)
+    I_axial_ais = (g_c / (1.0 - kappa)) * (V - V_AIS)
+
+    dV = (-I_ionic + Iapp + I_axial_soma) / Cm + Inoise
+    dV_AIS = (-I_ionic_AIS + I_axial_ais) / Cm
+
+    return [dV, dh, dn1, dn3, dCai, dr, dm,
+            dV_AIS, dh_AIS, dn1_AIS, dn3_AIS, dCai_AIS, dr_AIS, dm_AIS]
+
+
+def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
+                                      gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0,
+                                      gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=8.0,
+                                      gM_AIS=5.0, Cm=30.0,
+                                      rtol=1e-4, atol=1e-5):
+    """
+    Integrate the two-compartment PVIN model driven by a precomputed OU
+    noise trace (noise is injected at the soma).
+
+    Parameters
+    ----------
+    t_noise : ndarray
+        Time points of the noise trace (ms).
+    I_OU : ndarray
+        Noise current values (pA).
+    Bt : float
+        Calcium buffer capacity (uM).
+    y0 : array_like, shape (14,)
+        Initial conditions, see `pvin_hh_two_compartment`.
+    g_c : float
+        Axial coupling conductance (nS).
+    kappa : float
+        Soma-to-total surface area ratio.
+    gSK, ksk, gCa, gM : float, optional
+        Somatic conductance/sensitivity parameters.
+    gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS : float, optional
+        AIS conductance/sensitivity parameters.
+    Cm : float, optional
+        Membrane capacitance (both compartments).
+    rtol, atol : float, optional
+        Solver tolerances.
+
+    Returns
+    -------
+    scipy.integrate.OdeResult
+        Solution object with attributes `.t` (time) and `.y` (state
+        trajectories, 14 rows in the order given in
+        `pvin_hh_two_compartment`).
+    """
+
+    def inoise_at(t):
+        return np.interp(t, t_noise, I_OU)
+
+    def rhs(t, y):
+        Iapp = 0.0
+        Inoise = inoise_at(t)
+        return pvin_hh_two_compartment(
+            t, y, Bt, Iapp, g_c, kappa,
+            gSK=gSK, ksk=ksk, gCa=gCa, gM=gM,
+            gSK_AIS=gSK_AIS, ksk_AIS=ksk_AIS, gCa_AIS=gCa_AIS, gM_AIS=gM_AIS,
+            Inoise=Inoise, Cm=Cm,
+        )
+
+    sol = solve_ivp(
+        rhs,
+        t_span=(t_noise[0], t_noise[-1]),
+        y0=y0,
+        t_eval=t_noise,
+        method="LSODA",
+        rtol=rtol,
+        atol=atol,
+    )
+    return sol
+
+
 def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0,
             gM=5.0):
     """
@@ -51,93 +297,12 @@ def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0,
     list of float
         Derivatives [dV, dh, dn1, dn3, dCai, dr, dm].
     """
-    V, h, n1, n3, Cai, r, m = y
-
-    # Fixed membrane parameters
-    gNa, VNa = 300.0, 58.0
-    gKv1, gKv3, VK = 15.0, 180.0, -80.0
-    VCa = 68.0
-    Vleak, gleak = -50.0, 8.0
     Cm = 30.0
-    pgamma = 0.01
-
-    # INa kinetics
-    Vm, Sm = -17.5, -11.4
-    Aah, Sah, Vah = 0.0025, 10.0, 23.0
-    Abh, Sbh, Vbh = 0.094, -5.5, -31.0
-
-    # IKv1 kinetics
-    Aan1, Van1, San1 = 0.0020, -30.0, -9.0
-    Abn1, Vbn1, Sbn1 = 0.0170, -35.0, 5.9
-
-    # IKv3 kinetics
-    Aan3, Van3, San3 = 1.98, 96.0, -12.6
-    Abn3, Vbn3, Sbn3 = 0.34, -36.0, 10.5
-
-    # ICa kinetics
-    Va, Sa = 3.0, -10.4
-
-    # ISK
-    nk = 5
-
-    # Ih (HCN)
-    gh, Eh = 1.5, -30.0
-
-    # Calcium dynamics
-    F = 0.0964853321
-    mArea = 3000.0
-    d = 0.1
-    Car = 0.07
-    KD = 0.1
-
-    # Sodium current
-    mmax = 1.0 / (1.0 + np.exp((V - Vm) / Sm))
-    ah = Aah / np.exp((V - Vah) / Sah)
-    bh = Abh * (V - Vbh) / (1.0 - np.exp((V - Vbh) / Sbh))
-    INa = gNa * mmax**3 * h * (V - VNa)
-
-    # Kv1 current
-    an1 = Aan1 * (V - Van1) / (1.0 - np.exp((V - Van1) / San1))
-    bn1 = Abn1 / np.exp((V - Vbn1) / Sbn1)
-    IKv1 = gKv1 * n1**4 * (V - VK)
-
-    # Kv3 current
-    an3 = Aan3 * (V - Van3) / (1.0 - np.exp((V - Van3) / San3))
-    bn3 = Abn3 / np.exp((V - Vbn3) / Sbn3)
-    IKv3 = gKv3 * n3**2 * (V - VK)
-
-    # Calcium current
-    amax = 1.0 / (1.0 + np.exp((V - Va) / Sa))
-    ICa = gCa * amax**2 * (V - VCa)
-
-    # SK current
-    k = Cai**nk / (ksk**nk + Cai**nk)
-    ISK = gSK * k * (V - VK)
-
-    # Leak current
-    Ileak = gleak * (V - Vleak)
-
-    # HCN current
-    r_inf = 1.0 / (1.0 + np.exp((V + 84.0) / 10.2))
-    tau_r = 1.0 / (np.exp(-14.59 - 0.086 * V) + np.exp(-1.87 + 0.0701 * V))
-    Ih = gh * r * (V - Eh)
-
-    # M-current
-    m_inf = 1.0 / (1.0 + np.exp(-(V + 25.0) / 11.0))
-    tau_m = 1.0 / (
-        0.003 / np.exp(-(V + 78.0) / 19.0)
-        + 0.003 / np.exp((V + 78.0) / 19.0)
+    I_ionic, dh, dn1, dn3, dCai, dr, dm = _compartment_derivatives(
+        *y, Bt, gSK, ksk, gCa, gM
     )
-    IM = gM * m * (V - VK)
-
-    dV = (-Ileak - INa - IKv1 - IKv3 - ICa - ISK - Ih - IM + Iapp) / Cm + Inoise
-    dh = ah * (1.0 - h) - bh * h
-    dn1 = an1 * (1.0 - n1) - bn1 * n1
-    dn3 = an3 * (1.0 - n3) - bn3 * n3
-    dCai = (-ICa / (2.0 * F * mArea * d) - pgamma * (Cai - Car)) / (1.0 + Bt / KD)
-    dr = (r_inf - r) / tau_r
-    dm = (m_inf - m) / tau_m
-
+    V = y[0]
+    dV = (-I_ionic + Iapp) / Cm + Inoise
     return [dV, dh, dn1, dn3, dCai, dr, dm]
 
 
@@ -375,7 +540,7 @@ def main():
     sigma = 1
     dt = 0.05
     T = 90000.0
-    print_time = 90000.0
+    print_time = 3000.0
 
     t_noise, I_noise = generate_ou_noise(T, dt, mu, tau, sigma, seed=0)
 
@@ -386,7 +551,7 @@ def main():
 
     values_at_print_time = [np.interp(print_time, sol.t, sol.y[i]) for i in range(7)]
     V, h, n1, n3, Cai, r, m = values_at_print_time
-    print(f"At t={print_time:.1f} ms")
+    print(f"At t={print_time:.1f} ms (3.0 s):")
     print(f"V={V:.6f}, h={h:.6f}, n1={n1:.6f}, n3={n3:.6f}, Cai={Cai:.6f}, r={r:.6f}, m={m:.6f}")
 
     n_spikes = count_spikes(sol.t, sol.y[0])
