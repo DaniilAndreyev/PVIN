@@ -13,7 +13,8 @@ from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 
 
-def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0):
+def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0,
+            gM=5.0):
     """
     Right-hand side of the PVIN Hodgkin-Huxley system.
 
@@ -21,14 +22,15 @@ def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0):
     ----------
     t : float
         Time (ms).
-    y : array_like, shape (6,)
-        State vector [V, h, n1, n3, Cai, r]:
+    y : array_like, shape (7,)
+        State vector [V, h, n1, n3, Cai, r, m]:
             V   - membrane voltage (mV)
             h   - Na+ inactivation gate
             n1  - Kv1 activation gate
             n3  - Kv3 activation gate
             Cai - intracellular calcium concentration (uM)
             r   - HCN activation gate
+            m   - M-current (IM) activation gate
     Bt : float
         Calcium buffer capacity (uM).
     Iapp : float
@@ -41,13 +43,15 @@ def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0):
         Calcium channel conductance (nS).
     Inoise : float, optional
         Additional noise current term added directly to dV (not scaled by Cm).
+    gM : float, optional
+        M-current (IM) conductance (nS).
 
     Returns
     -------
     list of float
-        Derivatives [dV, dh, dn1, dn3, dCai, dr].
+        Derivatives [dV, dh, dn1, dn3, dCai, dr, dm].
     """
-    V, h, n1, n3, Cai, r = y
+    V, h, n1, n3, Cai, r, m = y
 
     # Fixed membrane parameters
     gNa, VNa = 300.0, 58.0
@@ -118,14 +122,23 @@ def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0):
     tau_r = 1.0 / (np.exp(-14.59 - 0.086 * V) + np.exp(-1.87 + 0.0701 * V))
     Ih = gh * r * (V - Eh)
 
-    dV = (-Ileak - INa - IKv1 - IKv3 - ICa - ISK - Ih + Iapp) / Cm + Inoise
+    # M-current
+    m_inf = 1.0 / (1.0 + np.exp(-(V + 25.0) / 11.0))
+    tau_m = 1.0 / (
+        0.003 / np.exp(-(V + 78.0) / 19.0)
+        + 0.003 / np.exp((V + 78.0) / 19.0)
+    )
+    IM = gM * m * (V - VK)
+
+    dV = (-Ileak - INa - IKv1 - IKv3 - ICa - ISK - Ih - IM + Iapp) / Cm + Inoise
     dh = ah * (1.0 - h) - bh * h
     dn1 = an1 * (1.0 - n1) - bn1 * n1
     dn3 = an3 * (1.0 - n3) - bn3 * n3
     dCai = (-ICa / (2.0 * F * mArea * d) - pgamma * (Cai - Car)) / (1.0 + Bt / KD)
     dr = (r_inf - r) / tau_r
+    dm = (m_inf - m) / tau_m
 
-    return [dV, dh, dn1, dn3, dCai, dr]
+    return [dV, dh, dn1, dn3, dCai, dr, dm]
 
 
 def generate_ou_noise(T, dt, mu, tau, sigma, seed=None):
@@ -171,7 +184,7 @@ def generate_ou_noise(T, dt, mu, tau, sigma, seed=None):
 
 
 def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
-                      rtol=1e-4, atol=1e-5):
+                      gM=1.0, rtol=1e-4, atol=1e-5):
     """
     Integrate the PVIN model driven by a precomputed OU noise trace.
 
@@ -183,9 +196,9 @@ def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
         Noise current values (pA).
     Bt : float
         Calcium buffer capacity (uM).
-    y0 : array_like, shape (6,)
-        Initial conditions [V, h, n1, n3, Cai, r].
-    gSK, ksk, gCa : float, optional
+    y0 : array_like, shape (7,)
+        Initial conditions [V, h, n1, n3, Cai, r, m].
+    gSK, ksk, gCa, gM : float, optional
         Model conductance/sensitivity overrides.
     rtol, atol : float, optional
         Solver tolerances.
@@ -202,14 +215,15 @@ def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
     def rhs(t, y):
         Iapp = 0.0
         Inoise = inoise_at(t)
-        return pvin_hh(t, y, Bt, Iapp, gSK=gSK, ksk=ksk, gCa=gCa, Inoise=Inoise)
+        return pvin_hh(t, y, Bt, Iapp, gSK=gSK, ksk=ksk, gCa=gCa,
+                       Inoise=Inoise, gM=gM)
 
     sol = solve_ivp(
         rhs,
         t_span=(t_noise[0], t_noise[-1]),
         y0=y0,
         t_eval=t_noise,
-        method="RK45",
+        method="LSODA",
         rtol=rtol,
         atol=atol,
     )
@@ -219,11 +233,11 @@ def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
 def count_spikes(t, V, threshold=-20.0, min_isi=2.0):
     """
     Count action potentials in a voltage trace via threshold crossing.
- 
+
     A spike is counted each time V crosses `threshold` from below to above,
     with a refractory-style minimum inter-spike interval to avoid double
     counting noisy fluctuations near threshold.
- 
+
     Parameters
     ----------
     t : ndarray
@@ -234,7 +248,7 @@ def count_spikes(t, V, threshold=-20.0, min_isi=2.0):
         Voltage threshold (mV) defining a spike crossing.
     min_isi : float, optional
         Minimum time (ms) between counted spikes.
- 
+
     Returns
     -------
     int
@@ -263,7 +277,7 @@ def run_tau_sigma_sweep(tau_values, sigma_values, T=90000.0, dt=0.05,
                          y0=None, spike_threshold=-20.0, min_isi=2.0):
     """
     Sweep OU noise tau and sigma values and count spikes for each combination.
- 
+
     Parameters
     ----------
     tau_values : sequence of float
@@ -287,13 +301,12 @@ def run_tau_sigma_sweep(tau_values, sigma_values, T=90000.0, dt=0.05,
         Voltage threshold used for spike counting (mV).
     min_isi : float, optional
         Minimum inter-spike interval used for spike counting (ms).
- 
+
     Returns
     -------
     spike_counts : ndarray, shape (len(tau_values), len(sigma_values))
         Number of spikes for each (tau, sigma) combination.
     """
-
 
     spike_counts = np.zeros((len(tau_values), len(sigma_values)), dtype=int)
 
@@ -314,7 +327,7 @@ def plot_tau_sigma_sweep(tau_values, sigma_values, spike_counts):
     """
     Plot spike count as a function of sigma for each tau, plus a heatmap,
     and report the correlation between sigma and spike count for each tau.
- 
+
     Parameters
     ----------
     tau_values : sequence of float
@@ -362,19 +375,19 @@ def main():
     sigma = 1
     dt = 0.05
     T = 90000.0
-    print_time = 3000.0
+    print_time = 90000.0
 
     t_noise, I_noise = generate_ou_noise(T, dt, mu, tau, sigma, seed=0)
 
-    y0 = [-49.086653, 0.980895, 0.027342, 0.002419, 0.141284, 0.031588]
+    y0 = [-49.526661, 0.982752, 0.024632, 0.002247, 0.136530, 0.032935, 0.097115]
     Bt = 90.0
 
     sol = run_pvin_with_ou(t_noise, I_noise, Bt, y0)
 
-    values_at_print_time = [np.interp(print_time, sol.t, sol.y[i]) for i in range(6)]
-    V, h, n1, n3, Cai, r = values_at_print_time
-    print(f"At t={print_time:.1f} ms (3.0 s):")
-    print(f"V={V:.6f}, h={h:.6f}, n1={n1:.6f}, n3={n3:.6f}, Cai={Cai:.6f}, r={r:.6f}")
+    values_at_print_time = [np.interp(print_time, sol.t, sol.y[i]) for i in range(7)]
+    V, h, n1, n3, Cai, r, m = values_at_print_time
+    print(f"At t={print_time:.1f} ms")
+    print(f"V={V:.6f}, h={h:.6f}, n1={n1:.6f}, n3={n3:.6f}, Cai={Cai:.6f}, r={r:.6f}, m={m:.6f}")
 
     n_spikes = count_spikes(sol.t, sol.y[0])
     print(f"Total spikes detected: {n_spikes}")
@@ -389,7 +402,7 @@ def main():
     axes[1].plot(sol.t, sol.y[0], 'k', linewidth=0.5)
     axes[1].set_xlabel('T (ms)')
     axes[1].set_ylabel('V (mV)')
-    axes[1].set_title(f'PVIN response to OU noise (Bt={Bt} uM)')
+    axes[1].set_title(f'PVIN response to OU noise')
     axes[1].set_ylim(-80, 50)
 
     plt.tight_layout()
