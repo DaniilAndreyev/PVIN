@@ -121,7 +121,7 @@ def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
                                       gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0,
                                       gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=8.0,
                                       gM_AIS=5.0, Cm=30.0,
-                                      rtol=1e-4, atol=1e-5):
+                                      rtol=1e-3, atol=1e-4):
     """Integrate the two-compartment PVIN model driven by OU noise."""
 
     def inoise_at(t):
@@ -218,3 +218,22 @@ def count_spikes(t, V, threshold=-20.0, min_isi=2.0):
             filtered.append(st)
 
     return len(filtered)
+
+
+def default_soma_initial_state():
+    """Return the shared 7-state resting condition used across scripts."""
+    return [
+        -50.908283904949386,
+        0.9874477040858244,
+        0.017700897448150392,
+        0.0017833075574000554,
+        0.14045481906365542,
+        0.037533345103523436,
+        0.08664551707487766,
+    ]
+
+
+def default_two_compartment_initial_state():
+    """Return the shared 14-state resting condition for soma and AIS."""
+    soma_state = default_soma_initial_state()
+    return soma_state + soma_state.copy()

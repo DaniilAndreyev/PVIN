@@ -5,7 +5,12 @@ Tau/sigma sweep analysis and plotting for the PVIN model.
 import numpy as np
 import matplotlib.pyplot as plt
 
-from pvin_model import count_spikes, generate_ou_noise, run_pvin_with_ou
+from pvin_model import (
+    count_spikes,
+    default_soma_initial_state,
+    generate_ou_noise,
+    run_pvin_with_ou,
+)
 
 
 def run_tau_sigma_sweep(tau_values, sigma_values, T=90000.0, dt=0.05,
@@ -73,13 +78,7 @@ def main():
     T = 90000.0
     Bt = 90.0
 
-    y0 = [-49.52776733833847,
-          0.9827093136484906,
-          0.024625396067553557,
-          0.0022470251324288853,
-          0.14110408589099907,
-          0.03293826520477305,
-          0.0971064287710309]
+    y0 = default_soma_initial_state()
 
     tau_values = [10, 100, 1000]
     sigma_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
