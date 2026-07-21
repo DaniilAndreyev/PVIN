@@ -1,5 +1,5 @@
 """
-Two-compartment (soma + AIS) PVIN single-trace run, printing, and plotting.
+Two-compartment (soma + AIS) PVIN trace run, printing, and plotting.
 """
 
 import numpy as np
@@ -21,8 +21,8 @@ def main():
     T = 90000.0
     print_time = 3000.0
 
-    g_c = 5.0
-    kappa = 0.3
+    g_c = 0.09
+    kappa = 0.9
 
     t_noise, I_noise = generate_ou_noise(T, dt, mu, tau, sigma, seed=0)
 

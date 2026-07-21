@@ -149,17 +149,6 @@ def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
     return sol
 
 
-def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0,
-            gM=5.0):
-    """Right-hand side of the PVIN Hodgkin-Huxley system."""
-    Cm = 30.0
-    I_ionic, dh, dn1, dn3, dCai, dr, dm = _compartment_derivatives(
-        *y, Bt, gSK, ksk, gCa, gM
-    )
-    dV = (-I_ionic + Iapp) / Cm + Inoise
-    return [dV, dh, dn1, dn3, dCai, dr, dm]
-
-
 def generate_ou_noise(T, dt, mu, tau, sigma, seed=None):
     """Generate an Ornstein-Uhlenbeck noise trace via Euler-Maruyama."""
     rng = np.random.default_rng(seed)
@@ -176,31 +165,6 @@ def generate_ou_noise(T, dt, mu, tau, sigma, seed=None):
         )
 
     return t_noise, I_OU
-
-
-def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
-                      gM=1.0, rtol=1e-4, atol=1e-5):
-    """Integrate the PVIN model driven by a precomputed OU noise trace."""
-
-    def inoise_at(t):
-        return np.interp(t, t_noise, I_OU)
-
-    def rhs(t, y):
-        Iapp = 0.0
-        Inoise = inoise_at(t)
-        return pvin_hh(t, y, Bt, Iapp, gSK=gSK, ksk=ksk, gCa=gCa,
-                       Inoise=Inoise, gM=gM)
-
-    sol = solve_ivp(
-        rhs,
-        t_span=(t_noise[0], t_noise[-1]),
-        y0=y0,
-        t_eval=t_noise,
-        method="LSODA",
-        rtol=rtol,
-        atol=atol,
-    )
-    return sol
 
 
 def count_spikes(t, V, threshold=-20.0, min_isi=2.0):

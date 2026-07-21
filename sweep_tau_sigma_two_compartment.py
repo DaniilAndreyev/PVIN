@@ -18,6 +18,48 @@ def run_tau_sigma_sweep_two_compartment(tau_values, sigma_values, g_c, kappa,
                                          T=90000.0, dt=0.05, mu=0.0, Bt=90.0,
                                          seed=0, y0=None,
                                          spike_threshold=-20.0, min_isi=2.0):
+    """
+    Sweep OU noise tau and sigma values for the two-compartment (soma+AIS)
+    model, counting spikes separately for each compartment at every
+    combination.
+
+    Parameters
+    ----------
+    tau_values : sequence of float
+        OU correlation time constants to test (ms).
+    sigma_values : sequence of float
+        OU noise amplitudes to test (pA).
+    g_c : float
+        Axial coupling conductance between soma and AIS (nS).
+    kappa : float
+        Soma-to-total surface area ratio (0 < kappa < 1).
+    T : float, optional
+        Simulation duration (ms).
+    dt : float, optional
+        OU noise integration timestep (ms).
+    mu : float, optional
+        OU mean current (pA).
+    Bt : float, optional
+        Calcium buffer capacity (uM).
+    seed : int, optional
+        Random seed (kept fixed across the sweep).
+    y0 : array_like, shape (14,)
+        Initial condition [soma states..., AIS states...]. Required.
+    spike_threshold : float, optional
+        Voltage threshold used for spike counting (mV).
+    min_isi : float, optional
+        Minimum inter-spike interval used for spike counting (ms).
+
+    Returns
+    -------
+    soma_spike_counts : ndarray, shape (len(tau_values), len(sigma_values))
+        Soma spike counts for each (tau, sigma) combination.
+    ais_spike_counts : ndarray, shape (len(tau_values), len(sigma_values))
+        AIS spike counts for each (tau, sigma) combination.
+    """
+
+    if y0 is None:
+        y0 = default_two_compartment_initial_state()
 
     soma_spike_counts = np.zeros((len(tau_values), len(sigma_values)), dtype=int)
     ais_spike_counts = np.zeros((len(tau_values), len(sigma_values)), dtype=int)
@@ -42,6 +84,13 @@ def run_tau_sigma_sweep_two_compartment(tau_values, sigma_values, g_c, kappa,
 
 def plot_tau_sigma_sweep(tau_values, sigma_values, spike_counts,
                           compartment_label="soma"):
+    """Plot spike count curves by tau and a tau/sigma heatmap.
+
+    Parameters
+    ----------
+    compartment_label : str, optional
+        Used in plot titles/print statements, e.g. "soma" or "AIS".
+    """
     sigma_arr = np.asarray(sigma_values)
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
@@ -83,16 +132,16 @@ def main():
     T = 90000.0
     Bt = 90.0
 
+    g_c = 0.09
+    kappa = 0.9
+
+    y0 = default_two_compartment_initial_state()
+
     tau_values = [10, 100, 1000]
     sigma_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
 
-    g_c = 5.0
-    kappa = 0.3
-    y0_two_compartment = default_two_compartment_initial_state()
-
     soma_spike_counts, ais_spike_counts = run_tau_sigma_sweep_two_compartment(
-        tau_values, sigma_values, g_c, kappa, T=T, dt=dt, mu=mu, Bt=Bt,
-        y0=y0_two_compartment,
+        tau_values, sigma_values, g_c, kappa, T=T, dt=dt, mu=mu, Bt=Bt, y0=y0,
     )
     plot_tau_sigma_sweep(tau_values, sigma_values, soma_spike_counts,
                           compartment_label="soma")
