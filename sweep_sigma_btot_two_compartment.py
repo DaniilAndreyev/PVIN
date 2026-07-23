@@ -36,7 +36,7 @@ def run_sigma_Bt_sweep_two_compartment(sigma_values, Bt_values, tau, g_c, kappa,
     kappa : float
         Soma-to-total surface area ratio (0 < kappa < 1).
     T, dt, mu, seed, spike_threshold, min_isi : see run_tau_sigma_sweep.
-    y0 : array_like, shape (14,)
+    y0 : array_like, shape (16,)
         Initial condition [soma states..., AIS states...]. Required.
 
     Returns
@@ -61,7 +61,7 @@ def run_sigma_Bt_sweep_two_compartment(sigma_values, Bt_values, tau, g_c, kappa,
                 sol.t, sol.y[0], threshold=spike_threshold, min_isi=min_isi
             )
             n_spikes_ais = count_spikes(
-                sol.t, sol.y[7], threshold=spike_threshold, min_isi=min_isi
+                sol.t, sol.y[8], threshold=spike_threshold, min_isi=min_isi
             )
             soma_spike_counts[i, j] = n_spikes_soma
             ais_spike_counts[i, j] = n_spikes_ais

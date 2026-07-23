@@ -43,7 +43,7 @@ def run_tau_sigma_sweep_two_compartment(tau_values, sigma_values, g_c, kappa,
         Calcium buffer capacity (uM).
     seed : int, optional
         Random seed (kept fixed across the sweep).
-    y0 : array_like, shape (14,)
+    y0 : array_like, shape (16,)
         Initial condition [soma states..., AIS states...]. Required.
     spike_threshold : float, optional
         Voltage threshold used for spike counting (mV).
@@ -72,7 +72,7 @@ def run_tau_sigma_sweep_two_compartment(tau_values, sigma_values, g_c, kappa,
                 sol.t, sol.y[0], threshold=spike_threshold, min_isi=min_isi
             )
             n_spikes_ais = count_spikes(
-                sol.t, sol.y[7], threshold=spike_threshold, min_isi=min_isi
+                sol.t, sol.y[8], threshold=spike_threshold, min_isi=min_isi
             )
             soma_spike_counts[i, j] = n_spikes_soma
             ais_spike_counts[i, j] = n_spikes_ais

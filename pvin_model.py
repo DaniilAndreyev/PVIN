@@ -5,6 +5,15 @@ Ornstein-Uhlenbeck noise input.
 The core channel/derivative math is JIT-compiled with Numba for speed.
 Requires: pip install numba
 
+I_h (HCN current) is modeled with two gating components (slow m_h1, fast
+m_h2), weighted by fraction f0:
+    I_h = g_h * (f0 * m_h1 + (1 - f0) * m_h2) * (V - E_h)
+
+State vector order (single compartment, 8 states):
+    [V, h, n1, n3, Cai, mh1, mh2, m]
+State vector order (two compartment, 16 states):
+    [soma states (8)..., AIS states (8)...]  -- AIS block starts at index 8
+
 Reference:
     Ma, X., Miraucourt, L., Qiu, H., Sharif-Naeini, R., Khadra, A. (2023).
     Calcium buffering tunes intrinsic excitability of spinal dorsal horn
@@ -36,7 +45,8 @@ def _safe_exp_nb(x):
 
 
 @njit(cache=True)
-def _compartment_derivatives_nb(V, h, n1, n3, Cai, r, m, Bt, gSK, ksk, gCa, gM):
+def _compartment_derivatives_nb(V, h, n1, n3, Cai, mh1, mh2, m, Bt,
+                                 gSK, ksk, gCa, gM, gh, f0):
     """JIT-compiled ionic current sum and gating/calcium derivatives."""
     gNa, VNa = 300.0, 58.0
     gKv1, gKv3, VK = 15.0, 180.0, -80.0
@@ -56,7 +66,7 @@ def _compartment_derivatives_nb(V, h, n1, n3, Cai, r, m, Bt, gSK, ksk, gCa, gM):
 
     Va, Sa = 3.0, -10.4
     nk = 5
-    gh, Eh = 1.5, -30.0
+    Eh = -30.0
 
     F = 0.0964853321
     mArea = 3000.0
@@ -85,11 +95,21 @@ def _compartment_derivatives_nb(V, h, n1, n3, Cai, r, m, Bt, gSK, ksk, gCa, gM):
 
     Ileak = gleak * (V - Vleak)
 
-    r_inf = 1.0 / (1.0 + _safe_exp_nb((V + 84.0) / 10.2))
-    tau_r = 1.0 / (_safe_exp_nb(-14.59 - 0.086 * V) + _safe_exp_nb(-1.87 + 0.0701 * V))
-    if tau_r < 1e-6:
-        tau_r = 1e-6
-    Ih = gh * r * (V - Eh)
+    alpha1 = (-0.00292 * V - 0.445) / (1.0 - _safe_exp_nb((V + 152.397) / 24.22))
+    beta1 = (0.0280 * V - 1.074) / (1.0 - _safe_exp_nb(-(V - 38.357) / 17.8))
+    tau_h1 = 1.0 / (alpha1 + beta1)
+    if tau_h1 < 1e-6:
+        tau_h1 = 1e-6
+    mh1_inf = alpha1 / (alpha1 + beta1)
+
+    alpha2 = (-0.00318 * V - 0.700) / (1.0 - _safe_exp_nb((V + 220.126) / 26.0))
+    beta2 = (0.0216 * V - 1.065) / (1.0 - _safe_exp_nb(-(V - 49.305) / 15.05))
+    tau_h2 = 1.0 / (alpha2 + beta2)
+    if tau_h2 < 1e-6:
+        tau_h2 = 1e-6
+    mh2_inf = alpha2 / (alpha2 + beta2)
+
+    Ih = gh * (f0 * mh1 + (1.0 - f0) * mh2) * (V - Eh)
 
     m_inf = 1.0 / (1.0 + _safe_exp_nb(-(V + 25.0) / 11.0))
     tau_m = 1.0 / (
@@ -106,51 +126,57 @@ def _compartment_derivatives_nb(V, h, n1, n3, Cai, r, m, Bt, gSK, ksk, gCa, gM):
     dn1 = an1 * (1.0 - n1) - bn1 * n1
     dn3 = an3 * (1.0 - n3) - bn3 * n3
     dCai = (-ICa / (2.0 * F * mArea * d) - pgamma * (Cai - Car)) / (1.0 + Bt / KD)
-    dr = (r_inf - r) / tau_r
+    dmh1 = (mh1_inf - mh1) / tau_h1
+    dmh2 = (mh2_inf - mh2) / tau_h2
     dm = (m_inf - m) / tau_m
 
-    return I_ionic, dh, dn1, dn3, dCai, dr, dm
+    return I_ionic, dh, dn1, dn3, dCai, dmh1, dmh2, dm
 
 
 @njit(cache=True)
-def _pvin_hh_core_nb(y, Bt, Iapp, gSK, ksk, gCa, gM, Inoise):
-    """JIT-compiled single-compartment RHS core. y is a length-7 array."""
-    V, h, n1, n3, Cai, r, m = y[0], y[1], y[2], y[3], y[4], y[5], y[6]
+def _pvin_hh_core_nb(y, Bt, Iapp, gSK, ksk, gCa, gM, gh, f0, Inoise):
+    """JIT-compiled single-compartment RHS core. y is a length-8 array."""
+    V, h, n1, n3, Cai, mh1, mh2, m = (
+        y[0], y[1], y[2], y[3], y[4], y[5], y[6], y[7]
+    )
     Cm = 30.0
 
-    I_ionic, dh, dn1, dn3, dCai, dr, dm = _compartment_derivatives_nb(
-        V, h, n1, n3, Cai, r, m, Bt, gSK, ksk, gCa, gM
+    I_ionic, dh, dn1, dn3, dCai, dmh1, dmh2, dm = _compartment_derivatives_nb(
+        V, h, n1, n3, Cai, mh1, mh2, m, Bt, gSK, ksk, gCa, gM, gh, f0
     )
     dV = (-I_ionic + Iapp) / Cm + Inoise
 
-    out = np.empty(7)
+    out = np.empty(8)
     out[0] = dV
     out[1] = dh
     out[2] = dn1
     out[3] = dn3
     out[4] = dCai
-    out[5] = dr
-    out[6] = dm
+    out[5] = dmh1
+    out[6] = dmh2
+    out[7] = dm
     return out
 
 
 @njit(cache=True)
 def _pvin_hh_two_compartment_core_nb(y, Bt, Iapp, g_c, kappa,
-                                      gSK, ksk, gCa, gM,
-                                      gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS,
+                                      gSK, ksk, gCa, gM, gh, f0,
+                                      gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS, gh_AIS, f0_AIS,
                                       Inoise, Cm):
-    """JIT-compiled two-compartment RHS core. y is a length-14 array."""
-    V, h, n1, n3, Cai, r, m = y[0], y[1], y[2], y[3], y[4], y[5], y[6]
-    V_AIS, h_AIS, n1_AIS, n3_AIS, Cai_AIS, r_AIS, m_AIS = (
-        y[7], y[8], y[9], y[10], y[11], y[12], y[13]
+    """JIT-compiled two-compartment RHS core. y is a length-16 array."""
+    V, h, n1, n3, Cai, mh1, mh2, m = (
+        y[0], y[1], y[2], y[3], y[4], y[5], y[6], y[7]
+    )
+    V_AIS, h_AIS, n1_AIS, n3_AIS, Cai_AIS, mh1_AIS, mh2_AIS, m_AIS = (
+        y[8], y[9], y[10], y[11], y[12], y[13], y[14], y[15]
     )
 
-    I_ionic, dh, dn1, dn3, dCai, dr, dm = _compartment_derivatives_nb(
-        V, h, n1, n3, Cai, r, m, Bt, gSK, ksk, gCa, gM
+    I_ionic, dh, dn1, dn3, dCai, dmh1, dmh2, dm = _compartment_derivatives_nb(
+        V, h, n1, n3, Cai, mh1, mh2, m, Bt, gSK, ksk, gCa, gM, gh, f0
     )
-    I_ionic_AIS, dh_AIS, dn1_AIS, dn3_AIS, dCai_AIS, dr_AIS, dm_AIS = _compartment_derivatives_nb(
-        V_AIS, h_AIS, n1_AIS, n3_AIS, Cai_AIS, r_AIS, m_AIS, Bt,
-        gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS
+    I_ionic_AIS, dh_AIS, dn1_AIS, dn3_AIS, dCai_AIS, dmh1_AIS, dmh2_AIS, dm_AIS = _compartment_derivatives_nb(
+        V_AIS, h_AIS, n1_AIS, n3_AIS, Cai_AIS, mh1_AIS, mh2_AIS, m_AIS, Bt,
+        gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS, gh_AIS, f0_AIS
     )
 
     I_axial_soma = (g_c / kappa) * (V_AIS - V)
@@ -159,56 +185,64 @@ def _pvin_hh_two_compartment_core_nb(y, Bt, Iapp, g_c, kappa,
     dV = (-I_ionic + Iapp + I_axial_soma) / Cm + Inoise
     dV_AIS = (-I_ionic_AIS + I_axial_ais) / Cm
 
-    out = np.empty(14)
+    out = np.empty(16)
     out[0] = dV
     out[1] = dh
     out[2] = dn1
     out[3] = dn3
     out[4] = dCai
-    out[5] = dr
-    out[6] = dm
-    out[7] = dV_AIS
-    out[8] = dh_AIS
-    out[9] = dn1_AIS
-    out[10] = dn3_AIS
-    out[11] = dCai_AIS
-    out[12] = dr_AIS
-    out[13] = dm_AIS
+    out[5] = dmh1
+    out[6] = dmh2
+    out[7] = dm
+    out[8] = dV_AIS
+    out[9] = dh_AIS
+    out[10] = dn1_AIS
+    out[11] = dn3_AIS
+    out[12] = dCai_AIS
+    out[13] = dmh1_AIS
+    out[14] = dmh2_AIS
+    out[15] = dm_AIS
     return out
 
 
-def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0, gM=5.0):
+def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0, gM=5.0,
+            gh=10.0, f0=0.5):
     """Right-hand side of the single-compartment PVIN Hodgkin-Huxley system.
 
-    Thin Python wrapper around the JIT-compiled core; same signature and
-    return type (list of 7 floats) as before.
+    Thin Python wrapper around the JIT-compiled core; same-style signature
+    as before, now with gh (I_h conductance) and f0 (slow/fast I_h weight,
+    Eq. 3) added. NOTE: f0=0.5 is currently a placeholder pending the real
+    value from the lab/paper.
     """
     y_arr = np.asarray(y, dtype=np.float64)
-    return _pvin_hh_core_nb(y_arr, Bt, Iapp, gSK, ksk, gCa, gM, Inoise)
+    return _pvin_hh_core_nb(y_arr, Bt, Iapp, gSK, ksk, gCa, gM, gh, f0, Inoise)
 
 
 def pvin_hh_two_compartment(t, y, Bt, Iapp, g_c, kappa,
-                             gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0,
+                             gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0, gh=10.0, f0=0.5,
                              gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=8.0, gM_AIS=5.0,
+                             gh_AIS=10.0, f0_AIS=0.5,
                              Inoise=0.0, Cm=30.0):
     """Right-hand side of the two-compartment (soma + AIS) PVIN model.
 
-    Thin Python wrapper around the JIT-compiled core; same signature and
-    return type (list of 14 floats) as before.
+    Thin Python wrapper around the JIT-compiled core; same-style signature
+    as before, now with gh/f0 (and AIS counterparts) added. NOTE: f0=0.5 is
+    currently a placeholder pending the real value from the lab/paper.
     """
     y_arr = np.asarray(y, dtype=np.float64)
     return _pvin_hh_two_compartment_core_nb(
         y_arr, Bt, Iapp, g_c, kappa,
-        gSK, ksk, gCa, gM,
-        gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS,
+        gSK, ksk, gCa, gM, gh, f0,
+        gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS, gh_AIS, f0_AIS,
         Inoise, Cm,
     )
 
 
 def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
                                       gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0,
+                                      gh=10.0, f0=0.5,
                                       gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=8.0,
-                                      gM_AIS=5.0, Cm=30.0,
+                                      gM_AIS=5.0, gh_AIS=10.0, f0_AIS=0.5, Cm=30.0,
                                       rtol=1e-2, atol=1e-3):
     """Integrate the two-compartment PVIN model driven by OU noise."""
 
@@ -220,8 +254,9 @@ def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
         Inoise = inoise_at(t)
         return pvin_hh_two_compartment(
             t, y, Bt, Iapp, g_c, kappa,
-            gSK=gSK, ksk=ksk, gCa=gCa, gM=gM,
+            gSK=gSK, ksk=ksk, gCa=gCa, gM=gM, gh=gh, f0=f0,
             gSK_AIS=gSK_AIS, ksk_AIS=ksk_AIS, gCa_AIS=gCa_AIS, gM_AIS=gM_AIS,
+            gh_AIS=gh_AIS, f0_AIS=f0_AIS,
             Inoise=Inoise, Cm=Cm,
         )
 
@@ -238,7 +273,7 @@ def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
 
 
 def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
-                      gM=1.0, rtol=1e-4, atol=1e-5):
+                      gM=1.0, gh=10.0, f0=0.5, rtol=1e-4, atol=1e-5):
     """Integrate the single-compartment PVIN model driven by OU noise."""
 
     def inoise_at(t):
@@ -248,7 +283,7 @@ def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
         Iapp = 0.0
         Inoise = inoise_at(t)
         return pvin_hh(t, y, Bt, Iapp, gSK=gSK, ksk=ksk, gCa=gCa,
-                       Inoise=Inoise, gM=gM)
+                       Inoise=Inoise, gM=gM, gh=gh, f0=f0)
 
     sol = solve_ivp(
         rhs,
@@ -298,19 +333,25 @@ def count_spikes(t, V, threshold=-20.0, min_isi=2.0):
 
 
 def default_soma_initial_state():
-    """Return the shared 7-state resting condition used across scripts."""
+    """Return the shared 8-state resting condition used across scripts.
+
+    State order: [V, h, n1, n3, Cai, mh1, mh2, m]
+    Computed by settling the model (Bt=90, Iapp=0, gh=10, f0=0.5) to
+    equilibrium under the two-component I_h formulation.
+    """
     return [
-        -50.908283904949386,
-        0.9874477040858244,
-        0.017700897448150392,
-        0.0017833075574000554,
-        0.14045481906365542,
-        0.037533345103523436,
-        0.08664551707487766,
+        -47.39964981903278,
+        0.9719528712565635,
+        0.04061024120659064,
+        0.003207495822362351,
+        0.14575235157860392,
+        0.17214638168093646,
+        0.17453040765834063,
+        0.1154408059181245,
     ]
 
 
 def default_two_compartment_initial_state():
-    """Return the shared 14-state resting condition for soma and AIS."""
+    """Return the shared 16-state resting condition for soma and AIS."""
     soma_state = default_soma_initial_state()
     return soma_state + soma_state.copy()

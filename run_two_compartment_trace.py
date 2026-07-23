@@ -1,5 +1,5 @@
 """
-Two-compartment (soma + AIS) PVIN trace run, printing, and plotting.
+Two-compartment (soma + AIS) PVIN single-trace run, printing, and plotting.
 """
 
 import numpy as np
@@ -31,14 +31,15 @@ def main():
 
     sol = run_pvin_two_compartment_with_ou(t_noise, I_noise, Bt, y0, g_c, kappa)
 
-    values_at_print_time = [np.interp(print_time, sol.t, sol.y[i]) for i in range(14)]
-    V, h, n1, n3, Cai, r, m, V_AIS, h_AIS, n1_AIS, n3_AIS, Cai_AIS, r_AIS, m_AIS = values_at_print_time
+    values_at_print_time = [np.interp(print_time, sol.t, sol.y[i]) for i in range(16)]
+    (V, h, n1, n3, Cai, mh1, mh2, m,
+     V_AIS, h_AIS, n1_AIS, n3_AIS, Cai_AIS, mh1_AIS, mh2_AIS, m_AIS) = values_at_print_time
     print(f"At t={print_time} ms (3.0 s):")
-    print(f"Soma: V={V}, h={h}, n1={n1}, n3={n3}, Cai={Cai}, r={r}, m={m}")
-    print(f"AIS:  V={V_AIS}, h={h_AIS}, n1={n1_AIS}, n3={n3_AIS}, Cai={Cai_AIS}, r={r_AIS}, m={m_AIS}")
+    print(f"Soma: V={V}, h={h}, n1={n1}, n3={n3}, Cai={Cai}, mh1={mh1}, mh2={mh2}, m={m}")
+    print(f"AIS:  V={V_AIS}, h={h_AIS}, n1={n1_AIS}, n3={n3_AIS}, Cai={Cai_AIS}, mh1={mh1_AIS}, mh2={mh2_AIS}, m={m_AIS}")
 
     n_spikes_soma = count_spikes(sol.t, sol.y[0])
-    n_spikes_ais = count_spikes(sol.t, sol.y[7])
+    n_spikes_ais = count_spikes(sol.t, sol.y[8])
     print(f"Total soma spikes detected: {n_spikes_soma}")
     print(f"Total AIS spikes detected: {n_spikes_ais}")
 
@@ -49,7 +50,7 @@ def main():
     axes[0].set_title('OU noise input current')
 
     axes[1].plot(sol.t, sol.y[0], linewidth=0.7, label='Soma')
-    axes[1].plot(sol.t, sol.y[7], linewidth=0.7, label='AIS')
+    axes[1].plot(sol.t, sol.y[8], linewidth=0.7, label='AIS')
     axes[1].set_xlabel('T (ms)')
     axes[1].set_ylabel('V (mV)')
     axes[1].set_title('Soma vs AIS response to OU noise')
