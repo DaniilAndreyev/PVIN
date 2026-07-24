@@ -206,27 +206,26 @@ def _pvin_hh_two_compartment_core_nb(y, Bt, Iapp, g_c, kappa,
 
 
 def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0, gM=5.0,
-            gh=10.0, f0=0.5):
+            gh=10.0, f0=0.6):
     """Right-hand side of the single-compartment PVIN Hodgkin-Huxley system.
 
     Thin Python wrapper around the JIT-compiled core; same-style signature
     as before, now with gh (I_h conductance) and f0 (slow/fast I_h weight,
-    Eq. 3) added. NOTE: f0=0.5 is currently a placeholder pending the real
-    value from the lab/paper.
+    Eq. 3) added.
     """
     y_arr = np.asarray(y, dtype=np.float64)
     return _pvin_hh_core_nb(y_arr, Bt, Iapp, gSK, ksk, gCa, gM, gh, f0, Inoise)
 
 
 def pvin_hh_two_compartment(t, y, Bt, Iapp, g_c, kappa,
-                             gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0, gh=10.0, f0=0.5,
+                             gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0, gh=10.0, f0=0.6,
                              gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=8.0, gM_AIS=5.0,
-                             gh_AIS=10.0, f0_AIS=0.5,
+                             gh_AIS=10.0, f0_AIS=0.6,
                              Inoise=0.0, Cm=30.0):
     """Right-hand side of the two-compartment (soma + AIS) PVIN model.
 
     Thin Python wrapper around the JIT-compiled core; same-style signature
-    as before, now with gh/f0 (and AIS counterparts) added. NOTE: f0=0.5 is
+    as before, now with gh/f0 (and AIS counterparts) added. NOTE: f0=0.6 is
     currently a placeholder pending the real value from the lab/paper.
     """
     y_arr = np.asarray(y, dtype=np.float64)
@@ -240,9 +239,9 @@ def pvin_hh_two_compartment(t, y, Bt, Iapp, g_c, kappa,
 
 def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
                                       gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0,
-                                      gh=10.0, f0=0.5,
+                                      gh=10.0, f0=0.6,
                                       gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=8.0,
-                                      gM_AIS=5.0, gh_AIS=10.0, f0_AIS=0.5, Cm=30.0,
+                                      gM_AIS=5.0, gh_AIS=10.0, f0_AIS=0.6, Cm=30.0,
                                       rtol=1e-2, atol=1e-3):
     """Integrate the two-compartment PVIN model driven by OU noise."""
 
@@ -273,7 +272,7 @@ def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
 
 
 def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
-                      gM=1.0, gh=10.0, f0=0.5, rtol=1e-4, atol=1e-5):
+                      gM=1.0, gh=10.0, f0=0.6, rtol=1e-4, atol=1e-5):
     """Integrate the single-compartment PVIN model driven by OU noise."""
 
     def inoise_at(t):
@@ -336,7 +335,7 @@ def default_soma_initial_state():
     """Return the shared 8-state resting condition used across scripts.
 
     State order: [V, h, n1, n3, Cai, mh1, mh2, m]
-    Computed by settling the model (Bt=90, Iapp=0, gh=10, f0=0.5) to
+    Computed by settling the model (Bt=90, Iapp=0, gh=10, f0=0.6) to
     equilibrium under the two-component I_h formulation.
     """
     return [
