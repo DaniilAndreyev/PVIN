@@ -3,8 +3,7 @@ Tau/sigma sweep analysis and plotting for the two-compartment (soma + AIS)
 PVIN model.
 
 Each (tau, sigma) combination is run over multiple independent OU noise
-seeds (n_trials), and the mean spike count is reported/plotted, per
-Fritz's note that a single noise realization is not representative.
+seeds (n_trials), and the mean spike count is reported/plotted.
 """
 
 import numpy as np

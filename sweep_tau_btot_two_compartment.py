@@ -2,9 +2,6 @@
 Tau vs Btot (calcium buffer capacity) sweep for the two-compartment
 (soma + AIS) PVIN model, holding sigma fixed.
 
-Per Fritz: focus on soma only, and use a line plot (not a heatmap) since
-there are few tau values.
-
 Each (tau, Bt) combination is run over multiple independent OU noise
 seeds (n_trials), and the mean spike count is reported/plotted.
 """
