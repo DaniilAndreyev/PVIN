@@ -208,10 +208,6 @@ def _pvin_hh_two_compartment_core_nb(y, Bt, Iapp, g_c, kappa,
 def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0, gM=5.0,
             gh=10.0, f0=0.6):
     """Right-hand side of the single-compartment PVIN Hodgkin-Huxley system.
-
-    Thin Python wrapper around the JIT-compiled core; same-style signature
-    as before, now with gh (I_h conductance) and f0 (slow/fast I_h weight,
-    Eq. 3) added.
     """
     y_arr = np.asarray(y, dtype=np.float64)
     return _pvin_hh_core_nb(y_arr, Bt, Iapp, gSK, ksk, gCa, gM, gh, f0, Inoise)
@@ -223,10 +219,6 @@ def pvin_hh_two_compartment(t, y, Bt, Iapp, g_c, kappa,
                              gh_AIS=10.0, f0_AIS=0.6,
                              Inoise=0.0, Cm=30.0):
     """Right-hand side of the two-compartment (soma + AIS) PVIN model.
-
-    Thin Python wrapper around the JIT-compiled core; same-style signature
-    as before, now with gh/f0 (and AIS counterparts) added. NOTE: f0=0.6 is
-    currently a placeholder pending the real value from the lab/paper.
     """
     y_arr = np.asarray(y, dtype=np.float64)
     return _pvin_hh_two_compartment_core_nb(
@@ -308,7 +300,7 @@ def generate_ou_noise(T, dt, mu, tau, sigma, seed=None):
         I_OU[i] = (
             I_OU[i - 1]
             + dt * (-(I_OU[i - 1] - mu) / tau)
-            + sigma * np.sqrt(2 * dt / tau) * rng.standard_normal()
+            + sigma * rng.standard_normal()
         )
 
     return t_noise, I_OU
@@ -339,14 +331,14 @@ def default_soma_initial_state():
     equilibrium under the two-component I_h formulation.
     """
     return [
-        -47.39964981903278,
-        0.9719528712565635,
-        0.04061024120659064,
-        0.003207495822362351,
-        0.14575235157860392,
-        0.17214638168093646,
-        0.17453040765834063,
-        0.1154408059181245,
+        -47.40405250680192,
+        0.9719805292859299,
+        0.04056876291225194,
+        0.003205137063936845,
+        0.14996013395946448,
+        0.17219488321610224,
+        0.17458683991405666,
+        0.11539993879572147,
     ]
 
 

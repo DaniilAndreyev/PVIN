@@ -16,7 +16,7 @@ from pvin_model import (
 def main():
     mu = 0
     tau = 1000
-    sigma = 1
+    sigma = 0.01
     dt = 0.05
     T = 90000.0
     print_time = 3000.0
