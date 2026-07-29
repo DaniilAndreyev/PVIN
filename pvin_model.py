@@ -46,27 +46,34 @@ def _safe_exp_nb(x):
 
 @njit(cache=True)
 def _compartment_derivatives_nb(V, h, n1, n3, Cai, mh1, mh2, m, Bt,
-                                 gSK, ksk, gCa, gM, gh, f0):
+                                 gSK, ksk, gCa, gM, gh, f0, gNa, gleak, Vleak):
     """JIT-compiled ionic current sum and gating/calcium derivatives."""
-    gNa, VNa = 300.0, 58.0
-    gKv1, gKv3, VK = 15.0, 180.0, -80.0
-    VCa = 68.0
-    Vleak, gleak = -50.0, 8.0
+    VNa = 49.0
+    gKv1, gKv3, VK = 20.0, 80.0, -88.0
+    VCa = 63.0
     pgamma = 0.01
 
-    Vm, Sm = -17.5, -11.4
-    Aah, Sah, Vah = 0.0025, 10.0, 23.0
-    Abh, Sbh, Vbh = 0.094, -5.5, -31.0
+    # INa: m_inf = 1/(1+exp(-(V+25)/12.3))
+    #   alpha_h = 0.0024/exp((V-5.0)/10.7)
+    #   beta_h  = 0.060*(V+23)/(1-exp(-(V+23)/5.0))
+    Vm, Sm = -25.0, -12.3
+    Aah, Sah, Vah = 0.0024, 10.7, 5.0
+    Abh, Sbh, Vbh = 0.060, -5.0, -23.0
 
-    Aan1, Van1, San1 = 0.0020, -30.0, -9.0
-    Abn1, Vbn1, Sbn1 = 0.0170, -35.0, 5.9
+    # IKv1.3: alpha_n1 = 0.002*(V+14)/(1-exp(-(V+14)/9.3))
+    #                   beta_n1  = 0.014/exp((V+54)/6.0)
+    Aan1, Van1, San1 = 0.0020, -14.0, -9.3
+    Abn1, Vbn1, Sbn1 = 0.0140, -54.0, 6.0
 
-    Aan3, Van3, San3 = 1.98, 96.0, -12.6
-    Abn3, Vbn3, Sbn3 = 0.34, -36.0, 10.5
+    # IKv3.1: alpha_n3 = 1.8*(V-80)/(1-exp(-(V-80)/12))
+    #         beta_n3  = 0.095/exp((V+36)/9.5)
+    Aan3, Van3, San3 = 1.8, 80.0, -12.0
+    Abn3, Vbn3, Sbn3 = 0.095, -36.0, 9.5
 
-    Va, Sa = 3.0, -10.4
+    # ICa: a_inf = 1/(1+exp(-(V+2.8)/5.0))
+    Va, Sa = -2.8, -5.0
     nk = 5
-    Eh = -30.0
+    Eh = -22.0
 
     F = 0.0964853321
     mArea = 3000.0
@@ -134,7 +141,7 @@ def _compartment_derivatives_nb(V, h, n1, n3, Cai, mh1, mh2, m, Bt,
 
 
 @njit(cache=True)
-def _pvin_hh_core_nb(y, Bt, Iapp, gSK, ksk, gCa, gM, gh, f0, Inoise):
+def _pvin_hh_core_nb(y, Bt, Iapp, gSK, ksk, gCa, gM, gh, f0, gNa, gleak, Vleak, Inoise):
     """JIT-compiled single-compartment RHS core. y is a length-8 array."""
     V, h, n1, n3, Cai, mh1, mh2, m = (
         y[0], y[1], y[2], y[3], y[4], y[5], y[6], y[7]
@@ -142,7 +149,7 @@ def _pvin_hh_core_nb(y, Bt, Iapp, gSK, ksk, gCa, gM, gh, f0, Inoise):
     Cm = 30.0
 
     I_ionic, dh, dn1, dn3, dCai, dmh1, dmh2, dm = _compartment_derivatives_nb(
-        V, h, n1, n3, Cai, mh1, mh2, m, Bt, gSK, ksk, gCa, gM, gh, f0
+        V, h, n1, n3, Cai, mh1, mh2, m, Bt, gSK, ksk, gCa, gM, gh, f0, gNa, gleak, Vleak
     )
     dV = (-I_ionic + Iapp) / Cm + Inoise
 
@@ -160,8 +167,9 @@ def _pvin_hh_core_nb(y, Bt, Iapp, gSK, ksk, gCa, gM, gh, f0, Inoise):
 
 @njit(cache=True)
 def _pvin_hh_two_compartment_core_nb(y, Bt, Iapp, g_c, kappa,
-                                      gSK, ksk, gCa, gM, gh, f0,
-                                      gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS, gh_AIS, f0_AIS,
+                                      gSK, ksk, gCa, gM, gh, f0, gNa, gleak, Vleak,
+                                      gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS, gh_AIS, f0_AIS, gNa_AIS,
+                                      gleak_AIS, Vleak_AIS,
                                       Inoise, Cm):
     """JIT-compiled two-compartment RHS core. y is a length-16 array."""
     V, h, n1, n3, Cai, mh1, mh2, m = (
@@ -172,11 +180,11 @@ def _pvin_hh_two_compartment_core_nb(y, Bt, Iapp, g_c, kappa,
     )
 
     I_ionic, dh, dn1, dn3, dCai, dmh1, dmh2, dm = _compartment_derivatives_nb(
-        V, h, n1, n3, Cai, mh1, mh2, m, Bt, gSK, ksk, gCa, gM, gh, f0
+        V, h, n1, n3, Cai, mh1, mh2, m, Bt, gSK, ksk, gCa, gM, gh, f0, gNa, gleak, Vleak
     )
     I_ionic_AIS, dh_AIS, dn1_AIS, dn3_AIS, dCai_AIS, dmh1_AIS, dmh2_AIS, dm_AIS = _compartment_derivatives_nb(
         V_AIS, h_AIS, n1_AIS, n3_AIS, Cai_AIS, mh1_AIS, mh2_AIS, m_AIS, Bt,
-        gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS, gh_AIS, f0_AIS
+        gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS, gh_AIS, f0_AIS, gNa_AIS, gleak_AIS, Vleak_AIS
     )
 
     I_axial_soma = (g_c / kappa) * (V_AIS - V)
@@ -205,35 +213,37 @@ def _pvin_hh_two_compartment_core_nb(y, Bt, Iapp, g_c, kappa,
     return out
 
 
-def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=8.0, Inoise=0.0, gM=5.0,
-            gh=10.0, f0=0.6):
-    """Right-hand side of the single-compartment PVIN Hodgkin-Huxley system.
-    """
+def pvin_hh(t, y, Bt, Iapp, gSK=10.0, ksk=0.8, gCa=6.0, Inoise=0.0, gM=5.0,
+            gh=10.0, f0=0.6, gNa=108.0, gleak=4.0, Vleak=-60.0):
+    """Right-hand side of the single-compartment PVIN Hodgkin-Huxley system."""
     y_arr = np.asarray(y, dtype=np.float64)
-    return _pvin_hh_core_nb(y_arr, Bt, Iapp, gSK, ksk, gCa, gM, gh, f0, Inoise)
+    return _pvin_hh_core_nb(y_arr, Bt, Iapp, gSK, ksk, gCa, gM, gh, f0, gNa, gleak, Vleak, Inoise)
 
 
 def pvin_hh_two_compartment(t, y, Bt, Iapp, g_c, kappa,
-                             gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0, gh=10.0, f0=0.6,
-                             gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=8.0, gM_AIS=5.0,
-                             gh_AIS=10.0, f0_AIS=0.6,
+                             gSK=10.0, ksk=0.8, gCa=6.0, gM=5.0, gh=10.0, f0=0.6, gNa=108.0,
+                             gleak=4.0, Vleak=-60.0,
+                             gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=6.0, gM_AIS=5.0,
+                             gh_AIS=10.0, f0_AIS=0.6, gNa_AIS=108.0,
+                             gleak_AIS=4.0, Vleak_AIS=-60.0,
                              Inoise=0.0, Cm=30.0):
-    """Right-hand side of the two-compartment (soma + AIS) PVIN model.
-    """
+    """Right-hand side of the two-compartment (soma + AIS) PVIN model."""
     y_arr = np.asarray(y, dtype=np.float64)
     return _pvin_hh_two_compartment_core_nb(
         y_arr, Bt, Iapp, g_c, kappa,
-        gSK, ksk, gCa, gM, gh, f0,
-        gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS, gh_AIS, f0_AIS,
+        gSK, ksk, gCa, gM, gh, f0, gNa, gleak, Vleak,
+        gSK_AIS, ksk_AIS, gCa_AIS, gM_AIS, gh_AIS, f0_AIS, gNa_AIS,
+        gleak_AIS, Vleak_AIS,
         Inoise, Cm,
     )
 
 
 def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
-                                      gSK=10.0, ksk=0.8, gCa=8.0, gM=5.0,
-                                      gh=10.0, f0=0.6,
-                                      gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=8.0,
-                                      gM_AIS=5.0, gh_AIS=10.0, f0_AIS=0.6, Cm=30.0,
+                                      gSK=10.0, ksk=0.8, gCa=6.0, gM=5.0,
+                                      gh=10.0, f0=0.6, gNa=108.0,
+                                      gSK_AIS=10.0, ksk_AIS=0.8, gCa_AIS=6.0,
+                                      gM_AIS=5.0, gh_AIS=10.0, f0_AIS=0.6, gNa_AIS=108.0,
+                                      gleak_AIS=4.0, Vleak_AIS=-60.0, Cm=30.0,
                                       rtol=1e-2, atol=1e-3):
     """Integrate the two-compartment PVIN model driven by OU noise."""
 
@@ -245,9 +255,9 @@ def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
         Inoise = inoise_at(t)
         return pvin_hh_two_compartment(
             t, y, Bt, Iapp, g_c, kappa,
-            gSK=gSK, ksk=ksk, gCa=gCa, gM=gM, gh=gh, f0=f0,
+            gSK=gSK, ksk=ksk, gCa=gCa, gM=gM, gh=gh, f0=f0, gNa=gNa,
             gSK_AIS=gSK_AIS, ksk_AIS=ksk_AIS, gCa_AIS=gCa_AIS, gM_AIS=gM_AIS,
-            gh_AIS=gh_AIS, f0_AIS=f0_AIS,
+            gh_AIS=gh_AIS, f0_AIS=f0_AIS, gNa_AIS=gNa_AIS,
             Inoise=Inoise, Cm=Cm,
         )
 
@@ -263,8 +273,8 @@ def run_pvin_two_compartment_with_ou(t_noise, I_OU, Bt, y0, g_c, kappa,
     return sol
 
 
-def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
-                      gM=1.0, gh=10.0, f0=0.6, rtol=1e-4, atol=1e-5):
+def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=6.0,
+                      gM=5.0, gh=10.0, f0=0.6, gNa=108.0, rtol=1e-4, atol=1e-5):
     """Integrate the single-compartment PVIN model driven by OU noise."""
 
     def inoise_at(t):
@@ -274,7 +284,7 @@ def run_pvin_with_ou(t_noise, I_OU, Bt, y0, gSK=10.0, ksk=0.8, gCa=8.0,
         Iapp = 0.0
         Inoise = inoise_at(t)
         return pvin_hh(t, y, Bt, Iapp, gSK=gSK, ksk=ksk, gCa=gCa,
-                       Inoise=Inoise, gM=gM, gh=gh, f0=f0)
+                       Inoise=Inoise, gM=gM, gh=gh, f0=f0, gNa=gNa)
 
     sol = solve_ivp(
         rhs,
@@ -327,18 +337,18 @@ def default_soma_initial_state():
     """Return the shared 8-state resting condition used across scripts.
 
     State order: [V, h, n1, n3, Cai, mh1, mh2, m]
-    Computed by settling the model (Bt=90, Iapp=0, gh=10, f0=0.6) to
-    equilibrium under the two-component I_h formulation.
+    Settled to equilibrium using the Table 1 parameter set and the
+    paper's gating kinetics (Btot=92, Iapp=0).
     """
     return [
-        -47.40405250680192,
-        0.9719805292859299,
-        0.04056876291225194,
-        0.003205137063936845,
-        0.14996013395946448,
-        0.17219488321610224,
-        0.17458683991405666,
-        0.11539993879572147,
+        -48.35074102597328,
+        0.9733567207030432,
+        0.24302314288668211,
+        0.014781038574447984,
+        0.10281834879704889,
+        0.18287887541082554,
+        0.18705868104079276,
+        0.10690094928676495,
     ]
 
 
